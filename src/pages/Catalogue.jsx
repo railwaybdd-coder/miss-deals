@@ -1,7 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 import ProduitCard from '../components/ProduitCard'
 import { FlowerSVG } from '../App'
+
+/* ── Optimisation image ── */
+const optimizeImage = (url, width = 500) => {
+  if (!url) return null
+  if (url.includes('unsplash.com')) {
+    return `${url.split('?')[0]}?w=${width}&q=75&fm=webp&fit=crop&auto=format`
+  }
+  return url
+}
 
 function parseImages(p) {
   if (!p) return []
@@ -83,37 +92,76 @@ const Icon = {
   ),
 }
 
+/* ── Skeleton card ── */
+function SkeletonCard() {
+  return (
+    <div style={{ borderRadius: 16, overflow: 'hidden', background: 'white', border: '1.5px solid #f0e6ed' }}>
+      <div className="shimmer" style={{ aspectRatio: '3/4', width: '100%' }} />
+      <div style={{ padding: '12px 12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="shimmer" style={{ height: 10, width: '45%', borderRadius: 6 }} />
+        <div className="shimmer" style={{ height: 15, width: '80%', borderRadius: 6 }} />
+        <div className="shimmer" style={{ height: 54, borderRadius: 12, marginTop: 4 }} />
+        <div className="shimmer" style={{ height: 40, borderRadius: 10 }} />
+      </div>
+    </div>
+  )
+}
+
 export default function Catalogue() {
   const [produits, setProduits]     = useState([])
   const [categories, setCategories] = useState([])
   const [filtre, setFiltre]         = useState('Tout')
   const [loading, setLoading]       = useState(true)
 
-  useEffect(() => {
-    supabase.from('produits').select('*').order('created_at', { ascending: false }).then(({ data }) => {
-      if (data) {
-        setProduits(data)
-        setCategories(['Tout', ...new Set(data.map(p => p.categorie).filter(Boolean))])
-      }
-      setLoading(false)
+  /* Préchargement de la première image visible */
+  const preloadImages = useCallback((liste, count = 4) => {
+    liste.slice(0, count).forEach(p => {
+      const imgs = parseImages(p)
+      const url  = optimizeImage(imgs[0] || p.image_url, 400)
+      if (!url) return
+      const link = document.createElement('link')
+      link.rel  = 'preload'
+      link.as   = 'image'
+      link.href = url
+      document.head.appendChild(link)
     })
   }, [])
 
+  useEffect(() => {
+    supabase
+      .from('produits')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setProduits(data)
+          setCategories(['Tout', ...new Set(data.map(p => p.categorie).filter(Boolean))])
+          preloadImages(data)
+        }
+        setLoading(false)
+      })
+  }, [preloadImages])
+
   const produitsFiltres = filtre === 'Tout' ? produits : produits.filter(p => p.categorie === filtre)
-  const vedettes   = produits.filter(p => p.vedette && p.stock > 0)
-  const nouveautes = [...produits].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4)
+  const vedettes        = produits.filter(p => p.vedette && p.stock > 0)
+  const nouveautes      = [...produits].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 4)
 
   const voirTout = () => {
     setFiltre('Tout')
     setTimeout(() => document.getElementById('catalogue-complet')?.scrollIntoView({ behavior: 'smooth' }), 50)
   }
 
+  /* Carte avec image optimisée */
+  const produitOptimise = (p) => {
+    const imgs = parseImages(p)
+    return { ...p, image_url: optimizeImage(imgs[0] || p.image_url, 400) }
+  }
+
   const renderGrille = (liste) => (
     <div className="catalogue-grid">
-      {liste.map((p, i) => {
-        const imgs = parseImages(p)
-        return <ProduitCard key={p.id} produit={{ ...p, image_url: imgs[0] || p.image_url }} index={i} />
-      })}
+      {liste.map((p, i) => (
+        <ProduitCard key={p.id} produit={produitOptimise(p)} index={i} />
+      ))}
     </div>
   )
 
@@ -123,7 +171,6 @@ export default function Catalogue() {
       <style>{`
         @keyframes floatSlow { from { transform: translate(0,0); } to { transform: translate(28px,45px); } }
 
-        /* ── Mobile-first catalogue grid ── */
         .catalogue-grid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
@@ -133,16 +180,12 @@ export default function Catalogue() {
           .catalogue-grid { gap: 16px; }
         }
         @media (min-width: 768px) {
-          .catalogue-grid {
-            grid-template-columns: repeat(3, 1fr);
-            gap: 22px;
-          }
+          .catalogue-grid { grid-template-columns: repeat(3, 1fr); gap: 22px; }
         }
         @media (min-width: 1100px) {
           .catalogue-grid { grid-template-columns: repeat(4, 1fr); }
         }
 
-        /* ── Bannière promo responsive ── */
         .promo-banner {
           flex-direction: column !important;
           align-items: flex-start !important;
@@ -156,7 +199,6 @@ export default function Catalogue() {
           }
         }
 
-        /* ── Pourquoi grid ── */
         .pourquoi-grid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
@@ -190,7 +232,7 @@ export default function Catalogue() {
         </div>
 
         {/* ── Vedettes ── */}
-        {vedettes.length > 0 && (
+        {(loading || vedettes.length > 0) && (
           <section style={{ marginBottom: 52 }}>
             <div className="fade-up delay-1" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
               <div>
@@ -203,12 +245,15 @@ export default function Catalogue() {
                 Tout voir {Icon.Arrow}
               </button>
             </div>
-            {renderGrille(vedettes)}
+            {loading
+              ? <div className="catalogue-grid">{[1,2,3,4].map(i => <SkeletonCard key={i} />)}</div>
+              : renderGrille(vedettes)
+            }
           </section>
         )}
 
         {/* ── Nouveautés ── */}
-        {nouveautes.length > 0 && (
+        {(loading || nouveautes.length > 0) && (
           <section style={{ marginBottom: 52 }}>
             <div className="fade-up delay-2" style={{ marginBottom: 20 }}>
               <p className="section-label" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -216,7 +261,10 @@ export default function Catalogue() {
               </p>
               <h2 className="font-display section-title" style={{ fontSize: 'clamp(20px,4vw,28px)' }}>Dernières Nouveautés</h2>
             </div>
-            {renderGrille(nouveautes)}
+            {loading
+              ? <div className="catalogue-grid">{[1,2,3,4].map(i => <SkeletonCard key={i} />)}</div>
+              : renderGrille(nouveautes)
+            }
           </section>
         )}
 
@@ -231,7 +279,6 @@ export default function Catalogue() {
           overflow: 'hidden',
           boxShadow: '0 24px 64px rgba(200,80,140,0.35)',
         }}>
-          {/* Cercles déco */}
           <div style={{ position: 'absolute', right: -50, top: -50, width: 240, height: 240, borderRadius: '50%', background: 'rgba(255,255,255,0.07)', pointerEvents: 'none' }} />
           <div style={{ position: 'absolute', right: 70, bottom: -70, width: 320, height: 320, borderRadius: '50%', background: 'rgba(255,255,255,0.04)', pointerEvents: 'none' }} />
           <div style={{ position: 'absolute', top: 16, left: 16, opacity: 0.28, animation: 'bloom 5.5s ease-in-out infinite' }}>
@@ -240,7 +287,6 @@ export default function Catalogue() {
           <div style={{ position: 'absolute', bottom: 16, right: 130, opacity: 0.22, animation: 'bloom 8s ease-in-out infinite 1.5s' }}>
             <FlowerSVG size={24} style={{ filter: 'brightness(10)' }} />
           </div>
-
           <div style={{ position: 'relative', zIndex: 1 }}>
             <p style={{ fontFamily: 'Josefin Sans', fontSize: 9, letterSpacing: '0.45em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.52)', marginBottom: 8 }}>
               Offre Exclusive Miss Deals
@@ -252,7 +298,6 @@ export default function Catalogue() {
               Sur toutes vos commandes — Partout au Sénégal
             </p>
           </div>
-
           <div style={{ animation: 'float-badge 3.5s ease-in-out infinite', position: 'relative', zIndex: 1, background: 'rgba(255,255,255,0.16)', backdropFilter: 'blur(12px)', color: 'white', borderRadius: 22, padding: '18px 28px', textAlign: 'center', transform: 'rotate(-2deg)', border: '1px solid rgba(255,255,255,0.32)', flexShrink: 0 }}>
             <p className="font-script" style={{ fontSize: 34, lineHeight: 1 }}>100%</p>
             <p style={{ fontFamily: 'Josefin Sans', fontSize: 9, letterSpacing: '0.25em', textTransform: 'uppercase', opacity: 0.82, marginTop: 4 }}>GRATUITE</p>
@@ -275,23 +320,20 @@ export default function Catalogue() {
 
           {/* Filtres */}
           <div className="fade-up delay-1" style={{ display: 'flex', gap: 8, flexWrap: 'nowrap', overflowX: 'auto', marginBottom: 28, paddingBottom: 6, scrollbarWidth: 'none' }}>
-            {categories.map(cat => (
-              <button key={cat} onClick={() => setFiltre(cat)} className={`filter-chip ${filtre === cat ? 'active' : ''}`}>{cat}</button>
-            ))}
+            {loading
+              ? [1,2,3,4].map(i => (
+                  <div key={i} className="shimmer" style={{ height: 34, width: 80, borderRadius: 999, flexShrink: 0 }} />
+                ))
+              : categories.map(cat => (
+                  <button key={cat} onClick={() => setFiltre(cat)} className={`filter-chip ${filtre === cat ? 'active' : ''}`}>{cat}</button>
+                ))
+            }
           </div>
 
-          {/* Grille ou skeletons */}
+          {/* Grille */}
           {loading ? (
             <div className="catalogue-grid">
-              {[1, 2, 3, 4, 5, 6].map(i => (
-                <div key={i} style={{ borderRadius: '1.4rem', overflow: 'hidden' }}>
-                  <div className="shimmer" style={{ aspectRatio: '3/4' }} />
-                  <div style={{ padding: '10px 0' }}>
-                    <div className="shimmer" style={{ height: 13, borderRadius: 8, marginBottom: 8 }} />
-                    <div className="shimmer" style={{ height: 11, borderRadius: 8, width: '58%' }} />
-                  </div>
-                </div>
-              ))}
+              {[1,2,3,4,5,6].map(i => <SkeletonCard key={i} />)}
             </div>
           ) : produitsFiltres.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '70px 0' }}>
@@ -333,6 +375,7 @@ export default function Catalogue() {
             ))}
           </div>
         </section>
+
       </div>
     </div>
   )
